@@ -1,0 +1,15 @@
+[package]
+name = "wye-platform"
+description = "Platform abstraction traits and types for Wye"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[features]
+# Serialize DeviceId/Transport/DeviceMode for the GUI snapshot contract.
+serde = ["dep:serde"]

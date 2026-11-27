@@ -1,0 +1,21 @@
+[package]
+name = "wye-cli"
+description = "Command-line debugging tool for Wye"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wye"
+path = "src/main.rs"
+
+[dependencies]
+wye-platform.workspace = true
+wye-core.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wye-mac.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+wye-win.workspace = true

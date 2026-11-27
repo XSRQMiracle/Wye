@@ -1,0 +1,10 @@
+[package]
+name = "wye-win"
+description = "Windows adapter for Wye (WASAPI)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+wye-platform.workspace = true

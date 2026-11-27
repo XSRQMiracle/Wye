@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/wye-platform", "crates/wye-core", "crates/wye-mac", "crates/wye-win", "crates/wye-cli"]
+exclude = ["experiments"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/XSRQMiracle/Wye"
+
+[workspace.dependencies]
+wye-platform = { path = "crates/wye-platform" }
+wye-core = { path = "crates/wye-core" }
+wye-mac = { path = "crates/wye-mac" }
+wye-win = { path = "crates/wye-win" }
+rtrb = "0.4.1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

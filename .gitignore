@@ -22,3 +22,20 @@ rustc-ice-*.txt
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Wye
+**/target/
+node_modules/
+ui/dist/
+experiments/drift-sim/results/series_*.csv
+experiments/mac-probe/out/
+experiments/mac-probe/bundle/WyeProbe.app/
+*.wav
+.DS_Store
+
+# Local AI-assisted development notes (not part of the published project)
+CLAUDE.md
+AGENTS.md
+.claude/
+docs/
+experiments/
