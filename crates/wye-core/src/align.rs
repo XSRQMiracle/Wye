@@ -372,6 +372,98 @@ mod tests {
     }
 
     #[test]
+    fn prefer_reference_keeps_system_path_and_reports_late_mirror() {
+        // Takeover would be chosen by Auto here; PreferReference never mutes the system path.
+        let p = plan(&input(
+            vec![dev("spk", true, 0.028, 0.0), dev("bt", false, 0.200, 0.0)],
+            AlignPolicy::PreferReference,
+            true,
+        ));
+        assert_eq!(p.mode, Mode::Reference);
+        assert_eq!(p.targets.len(), 1);
+        assert_eq!(p.targets[0].id.0, "bt");
+        let lam_min = 0.011 + 0.200 + 0.026;
+        assert!((p.targets[0].lambda - lam_min).abs() < 1e-9);
+        assert!((p.targets[0].late_by - (lam_min - 0.028)).abs() < 1e-9);
+        assert!(p
+            .advice
+            .iter()
+            .any(|a| matches!(a, Advice::MirrorLate { id, .. } if id.0 == "bt")));
+        assert!(p
+            .advice
+            .iter()
+            .any(|a| matches!(a, Advice::LipSync { suggest, .. } if suggest.0 == "bt")));
+    }
+
+    #[test]
+    fn prefer_takeover_takes_over_even_when_reference_is_feasible() {
+        let devices = vec![dev("bt", true, 0.200, 0.0), dev("spk", false, 0.028, 0.0)];
+        let p = plan(&input(devices.clone(), AlignPolicy::PreferTakeover, true));
+        assert_eq!(p.mode, Mode::Takeover);
+        assert_eq!(p.targets.len(), 2);
+        let common = 0.011 + 0.200 + 0.026;
+        assert!(p.targets.iter().all(|t| (t.lambda - common).abs() < 1e-9));
+        // Slowest device is the default: no lip-sync suggestion.
+        assert!(p.advice.is_empty(), "{:?}", p.advice);
+
+        // Without the ability to mute the capture it falls back to reference mode.
+        let p = plan(&input(devices, AlignPolicy::PreferTakeover, false));
+        assert_eq!(p.mode, Mode::Reference);
+        assert_eq!(p.targets.len(), 1);
+        assert!((p.targets[0].lambda - 0.200).abs() < 1e-9);
+    }
+
+    #[test]
+    fn empty_device_list_plans_nothing() {
+        for policy in [
+            AlignPolicy::Auto,
+            AlignPolicy::PreferReference,
+            AlignPolicy::PreferTakeover,
+        ] {
+            for can_mute in [true, false] {
+                let p = plan(&input(Vec::new(), policy, can_mute));
+                assert_eq!(p.mode, Mode::Reference);
+                assert!(p.targets.is_empty());
+                assert!(p.advice.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn only_default_device() {
+        // The system plays it natively: nothing for Wye to render.
+        let p = plan(&input(
+            vec![dev("spk", true, 0.028, 0.0)],
+            AlignPolicy::Auto,
+            true,
+        ));
+        assert_eq!(p.mode, Mode::Reference);
+        assert!(p.targets.is_empty());
+        assert!(p.advice.is_empty(), "{:?}", p.advice);
+
+        // Forced takeover renders the default device itself at its own minimum λ.
+        let p = plan(&input(
+            vec![dev("spk", true, 0.028, 0.0)],
+            AlignPolicy::PreferTakeover,
+            true,
+        ));
+        assert_eq!(p.mode, Mode::Takeover);
+        assert_eq!(p.targets.len(), 1);
+        assert!((p.targets[0].lambda - (0.011 + 0.028 + 0.026)).abs() < 1e-9);
+        assert!(p.advice.is_empty(), "{:?}", p.advice);
+
+        // Unchecked and the only device: nothing to play, nothing to advise but the mute limit.
+        let mut d = dev("spk", true, 0.028, 0.0);
+        d.checked = false;
+        let p = plan(&input(vec![d.clone()], AlignPolicy::Auto, true));
+        assert!(p.targets.is_empty());
+        assert!(p.advice.is_empty(), "{:?}", p.advice);
+        let p = plan(&input(vec![d], AlignPolicy::Auto, false));
+        assert!(p.targets.is_empty());
+        assert!(matches!(&p.advice[..], [Advice::CannotMuteDefault { id }] if id.0 == "spk"));
+    }
+
+    #[test]
     fn offsets_shift_targets() {
         let p = plan(&input(
             vec![dev("bt", true, 0.200, 0.0), dev("spk", false, 0.028, 0.010)],

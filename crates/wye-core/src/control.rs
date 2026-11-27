@@ -241,3 +241,218 @@ impl TimeDll {
         t_filt
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Nominal render callback period used by the tests: 512 frames at 48 kHz.
+    const DT: f64 = 512.0 / 48_000.0;
+
+    /// Ideal plant from the module documentation: `de/dt = δ − δ*`, where `δ*` is the true
+    /// relative clock offset between output and capture.
+    struct Plant {
+        e: f64,
+        drift: f64,
+    }
+
+    impl Plant {
+        fn step(&mut self, delta: f64, corr: Correction) {
+            if let Correction::Resync { seconds } = corr {
+                self.e -= seconds;
+            }
+            self.e += (delta - self.drift) * DT;
+        }
+    }
+
+    fn ctl() -> Controller {
+        Controller::new(ControllerParams::DEFAULT)
+    }
+
+    fn run(c: &mut Controller, p: &mut Plant, seconds: f64) {
+        for _ in 0..(seconds / DT) as usize {
+            let (d, corr) = c.update(p.e, DT, false);
+            p.step(d, corr);
+        }
+    }
+
+    #[test]
+    fn drift_step_300ppm_settles() {
+        let mut c = ctl();
+        let mut p = Plant {
+            e: 0.0,
+            drift: 300e-6,
+        };
+        let mut peak: f64 = 0.0;
+        let mut entered_at = None;
+        for i in 0..(120.0 / DT) as usize {
+            let (d, corr) = c.update(p.e, DT, false);
+            assert_eq!(corr, Correction::None, "no resync expected at step {i}");
+            p.step(d, corr);
+            let t = (i + 1) as f64 * DT;
+            peak = peak.max(p.e.abs());
+            if p.e.abs() <= 0.5e-3 {
+                entered_at.get_or_insert(t);
+            } else {
+                entered_at = None;
+            }
+        }
+        // Analytically the PI loop alone peaks at δ*/(ωn·e) ≈ 1.10 ms; the 1 s error
+        // pre-filter adds lag and the exact peak is 1.2026 ms independent of the callback
+        // period. The bound is 1.2 ms at 0.01 ms resolution.
+        assert!(peak <= 1.21e-3, "peak error {:.4} ms", peak * 1e3);
+        let t_in = entered_at.expect("never settled inside ±0.5 ms");
+        assert!(t_in <= 30.0, "entered ±0.5 ms for good at {t_in:.1} s");
+        // Steady state: δ tracks the clock offset and the error vanishes.
+        assert!((c.delta() - 300e-6).abs() < 1e-6, "δ = {}", c.delta());
+        assert!(p.e.abs() < 1e-5);
+    }
+
+    #[test]
+    fn latency_step_resyncs_and_keeps_integrator() {
+        let mut c = ctl();
+        let mut p = Plant {
+            e: 0.0,
+            drift: 200e-6,
+        };
+        run(&mut c, &mut p, 200.0);
+        let delta_before = c.delta();
+        let integ_before = c.integ;
+        assert!((delta_before - 200e-6).abs() < 1e-6);
+
+        // A 20 ms step (e.g. an underrun): the first confirm−1 samples are held as outliers.
+        let e_step = p.e + 0.020;
+        for _ in 0..ControllerParams::DEFAULT.confirm - 1 {
+            let (d, corr) = c.update(e_step, DT, false);
+            assert_eq!(corr, Correction::None);
+            assert_eq!(d, delta_before, "δ must be held while unsure");
+        }
+        let (d, corr) = c.update(e_step, DT, false);
+        match corr {
+            Correction::Resync { seconds } => {
+                assert!((seconds - 0.020).abs() < 1e-4, "resync {seconds}")
+            }
+            other => panic!("expected resync, got {other:?}"),
+        }
+        assert_eq!(d, delta_before);
+        assert_eq!(c.integ, integ_before, "integrator must survive a resync");
+        assert_eq!(c.filtered_error(), 0.0);
+        assert_eq!(c.stats.resyncs, 1);
+        assert_eq!(c.stats.runaway_resyncs, 0);
+
+        // The plant applies the jump (removing the step) and the loop simply continues.
+        p.e = e_step;
+        p.step(d, corr);
+        let (_, corr) = c.update(p.e, DT, false);
+        assert_eq!(corr, Correction::None);
+    }
+
+    #[test]
+    fn discontinuity_resyncs_on_single_update() {
+        let mut c = ctl();
+        for _ in 0..100 {
+            c.update(0.0, DT, false);
+        }
+        let (_, corr) = c.update(0.015, DT, true);
+        assert_eq!(corr, Correction::Resync { seconds: 0.015 });
+        assert_eq!(c.stats.outliers_rejected, 0);
+        // A negative step (mirror early) also resyncs at once, asking for silence.
+        let (_, corr) = c.update(-0.012, DT, true);
+        assert_eq!(corr, Correction::Resync { seconds: -0.012 });
+        // The flag alone, without a step, does not force a resync.
+        let (_, corr) = c.update(0.0001, DT, true);
+        assert_eq!(corr, Correction::None);
+    }
+
+    #[test]
+    fn saturation_anti_windup() {
+        let mut c = ctl();
+        let dmax = ControllerParams::DEFAULT.delta_max;
+        let imax = dmax / c.ki;
+        // 1500 ppm drift exceeds the actuator: δ saturates and the error runs away.
+        let mut p = Plant {
+            e: 0.0,
+            drift: 1500e-6,
+        };
+        let mut saturated_seen = false;
+        for _ in 0..(120.0 / DT) as usize {
+            let (d, corr) = c.update(p.e, DT, false);
+            assert!(c.integ.abs() <= imax * (1.0 + 1e-12), "integrator wound up");
+            saturated_seen |= d == dmax;
+            p.step(d, corr);
+        }
+        assert!(saturated_seen);
+        assert!(c.stats.saturated_updates > 0);
+        assert!(
+            c.stats.runaway_resyncs > 0,
+            "runaway error must be resynced"
+        );
+        assert!(p.e.abs() <= 0.011, "|e| = {:.2} ms", p.e * 1e3);
+
+        // Drift returns into range: without wind-up δ recovers promptly instead of staying
+        // pinned at the limit.
+        p.drift = 0.0;
+        let mut recovered_at = None;
+        for i in 0..(120.0 / DT) as usize {
+            let (d, corr) = c.update(p.e, DT, false);
+            p.step(d, corr);
+            if recovered_at.is_none() && d.abs() < 100e-6 && p.e.abs() < 0.5e-3 {
+                recovered_at = Some(i as f64 * DT);
+            }
+        }
+        let t = recovered_at.expect("did not recover after saturation");
+        assert!(t < 60.0, "recovered after {t:.1} s");
+        assert!(c.delta().abs() < 1e-5);
+    }
+
+    #[test]
+    fn delta_always_within_limit() {
+        let dmax = ControllerParams::DEFAULT.delta_max;
+        let mut c = ctl();
+        // Deterministic xorshift error sequence: small and large swings, random flags.
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for i in 0..200_000 {
+            let scale = if i % 1000 < 500 { 0.008 } else { 0.2 };
+            let e = (rnd() - 0.5) * scale;
+            let disc = rnd() < 0.01;
+            let (d, _) = c.update(e, DT, disc);
+            assert!(d.abs() <= dmax, "δ = {d} at {i}");
+            assert_eq!(d, c.delta());
+        }
+        // Seeding is clamped as well.
+        c.seed_delta(5e-3);
+        assert_eq!(c.delta(), dmax);
+        c.seed_delta(-5e-3);
+        assert_eq!(c.delta(), -dmax);
+        let (d, _) = c.update(-1.0e-3, DT, false);
+        assert!(d.abs() <= dmax);
+    }
+
+    #[test]
+    fn reset_error_keeps_drift_estimate() {
+        let mut c = ctl();
+        let mut p = Plant {
+            e: 0.0,
+            drift: -150e-6,
+        };
+        run(&mut c, &mut p, 200.0);
+        let d0 = c.delta();
+        let integ0 = c.integ;
+        c.reset_error();
+        assert_eq!(c.filtered_error(), 0.0);
+        assert_eq!(c.integ, integ0);
+        // After a reset the next sample primes the filter instead of counting as an outlier.
+        let (_, corr) = c.update(0.003, DT, false);
+        assert_eq!(corr, Correction::None);
+        assert_eq!(c.stats.outliers_rejected, 0);
+        assert!((c.filtered_error() - 0.003).abs() < 1e-12);
+        assert!((c.integ - integ0).abs() < 1e-3);
+        assert!(d0 < 0.0);
+    }
+}
