@@ -617,7 +617,7 @@ mod tests {
         let t1 = ts(0.0, 10);
         let t2 = ts(9100.0, 20); // 100-frame gap → silence path
         let t3 = ts(1e9, 30); // break
-        assert_no_alloc::assert_no_alloc(|| unsafe {
+        crate::assert_no_alloc(|| unsafe {
             capture_ioproc(
                 0,
                 &t1,

@@ -42,6 +42,20 @@ pub use tap::CaptureProbe;
 #[global_allocator]
 static ALLOC: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+/// Runs `f` with allocation forbidden and fails the test if it attempted any allocation
+/// (the workspace builds assert_no_alloc in counting mode).
+#[cfg(test)]
+pub(crate) fn assert_no_alloc<T>(f: impl FnOnce() -> T) -> T {
+    let before = assert_no_alloc::violation_count();
+    let r = assert_no_alloc::assert_no_alloc(f);
+    assert_eq!(
+        assert_no_alloc::violation_count() - before,
+        0,
+        "real-time code allocated"
+    );
+    r
+}
+
 #[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
 

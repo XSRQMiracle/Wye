@@ -19,5 +19,5 @@ block2 = "0.6.2"
 dispatch2 = "0.3.1"
 
 [dev-dependencies]
-assert_no_alloc = "1.1.2"
+assert_no_alloc.workspace = true
 rtrb.workspace = true

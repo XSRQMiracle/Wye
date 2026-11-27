@@ -1,7 +1,20 @@
 //! Proves that the platform-independent code running on the audio threads (capture timeline,
 //! render discontinuity tracking, sample format conversion) never touches the heap.
 
-use assert_no_alloc::{assert_no_alloc, AllocDisabler};
+use assert_no_alloc::AllocDisabler;
+
+/// Runs `f` with allocation forbidden and fails the test if it attempted any allocation
+/// (the workspace builds assert_no_alloc in counting mode).
+fn assert_no_alloc<T>(f: impl FnOnce() -> T) -> T {
+    let before = assert_no_alloc::violation_count();
+    let r = assert_no_alloc::assert_no_alloc(f);
+    assert_eq!(
+        assert_no_alloc::violation_count() - before,
+        0,
+        "real-time code allocated"
+    );
+    r
+}
 
 use crate::format::{
     decode_channel, decode_to_stereo, encode_from_stereo, RawWaveFormat, StereoPick, WaveFormat,

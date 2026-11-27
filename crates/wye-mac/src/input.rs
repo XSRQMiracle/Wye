@@ -200,7 +200,7 @@ mod tests {
         let mut d = vec![0.0f32; 5000 * 2];
         let mut abl = Abl4::new(&mut [(2, &mut d)]);
         let t = ts(0.0, 1);
-        assert_no_alloc::assert_no_alloc(|| unsafe {
+        crate::assert_no_alloc(|| unsafe {
             input_ioproc(
                 0,
                 &t,

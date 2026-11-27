@@ -695,7 +695,7 @@ mod tests {
         let mut abl = Abl4::new(&mut [(1, &mut l), (1, &mut rr)]);
         let t1 = ts(0.0, 1);
         let t2 = ts(7000.0, 2);
-        assert_no_alloc::assert_no_alloc(|| unsafe {
+        crate::assert_no_alloc(|| unsafe {
             render_ioproc(
                 0,
                 &t1,
